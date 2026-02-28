@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Email Alias Options</title>
+    <link rel="stylesheet" href="/src/styles/options.css" />
+  </head>
+  <body>
+    <main class="options">
+      <header>
+        <h1>Email Alias Options</h1>
+        <p>Set your domain and Cloudflare credentials once.</p>
+      </header>
+
+      <form id="settingsForm" novalidate>
+        <label>
+          Domain
+          <input id="domain" name="domain" type="text" placeholder="example.com" required />
+        </label>
+
+        <label>
+          Forward destination email
+          <input id="destinationEmail" name="destinationEmail" type="email" placeholder="you@gmail.com" required />
+        </label>
+
+        <label>
+          Cloudflare Account ID
+          <input id="accountId" name="accountId" type="text" required />
+        </label>
+
+        <label>
+          Cloudflare Zone ID
+          <input id="zoneId" name="zoneId" type="text" required />
+        </label>
+
+        <label>
+          Cloudflare API Token
+          <input id="apiToken" name="apiToken" type="password" required />
+        </label>
+
+        <div class="actions">
+          <button id="saveBtn" type="submit">Save</button>
+          <button id="testBtn" type="button" class="secondary">Test Cloudflare access</button>
+          <button id="clearHistoryBtn" type="button" class="ghost">Clear history</button>
+        </div>
+      </form>
+
+      <p id="status" aria-live="polite"></p>
+    </main>
+    <script type="module" src="/src/options/options.ts"></script>
+  </body>
+</html>

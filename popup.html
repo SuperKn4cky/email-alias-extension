@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Email Alias</title>
+    <link rel="stylesheet" href="/src/styles/popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <header>
+        <h1>Email Alias</h1>
+        <p id="siteHint">Current site: -</p>
+      </header>
+
+      <section class="panel">
+        <button id="generateBtn" type="button">Generate + Create + Copy</button>
+        <button id="fillBtn" type="button" class="secondary" disabled>Fill email field</button>
+        <p id="status" aria-live="polite">Configure your settings in Options first.</p>
+      </section>
+
+      <section class="panel alias-panel">
+        <h2>Last alias</h2>
+        <code id="aliasValue">-</code>
+      </section>
+
+      <section class="panel">
+        <div class="row">
+          <h2>Recent aliases</h2>
+          <button id="refreshHistoryBtn" type="button" class="ghost">Refresh</button>
+        </div>
+        <ul id="historyList" class="history"></ul>
+      </section>
+
+      <footer>
+        <a href="options.html" target="_blank" rel="noreferrer">Open options</a>
+      </footer>
+    </main>
+    <script type="module" src="/src/popup/popup.ts"></script>
+  </body>
+</html>

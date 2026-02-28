@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Email Alias for Bitwarden",
+  "version": "0.1.0",
+  "description": "Generate site-based random email aliases for your domain with Cloudflare Email Routing.",
+  "icons": {
+    "16": "icon.png",
+    "32": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "permissions": ["storage", "tabs", "activeTab", "scripting", "clipboardWrite"],
+  "host_permissions": ["https://api.cloudflare.com/*"],
+  "background": {
+    "service_worker": "assets/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Email Alias",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "24": "icon.png",
+      "32": "icon.png"
+    }
+  },
+  "options_page": "options.html"
+}
