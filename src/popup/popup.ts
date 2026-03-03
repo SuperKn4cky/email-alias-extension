@@ -8,6 +8,8 @@ const statusNode = document.querySelector<HTMLParagraphElement>('#status');
 const aliasValueNode = document.querySelector<HTMLElement>('#aliasValue');
 const generateButton = document.querySelector<HTMLButtonElement>('#generateBtn');
 const fillButton = document.querySelector<HTMLButtonElement>('#fillBtn');
+const customAliasInput = document.querySelector<HTMLInputElement>('#customAliasInput');
+const createCustomAliasButton = document.querySelector<HTMLButtonElement>('#createCustomAliasBtn');
 const historyList = document.querySelector<HTMLUListElement>('#historyList');
 const refreshHistoryButton = document.querySelector<HTMLButtonElement>('#refreshHistoryBtn');
 const themeToggleButton = document.querySelector<HTMLButtonElement>('#themeToggle');
@@ -15,6 +17,10 @@ const themeToggleButton = document.querySelector<HTMLButtonElement>('#themeToggl
 let latestAlias = '';
 let latestSiteHost = 'manual';
 let latestSiteSlug = 'manual';
+let configuredDomain = '';
+
+const CUSTOM_LOCAL_PART_REGEX = /^[a-z0-9](?:[a-z0-9._+-]{0,62}[a-z0-9])?$/i;
+type AliasSource = 'generated' | 'custom';
 
 function setStatus(message: string): void {
   if (statusNode) {
@@ -157,12 +163,136 @@ function createHistoryRecord(status: CloudflareStatus, errorCode?: string): Alia
   };
 }
 
+function setActionsEnabled(enabled: boolean): void {
+  if (generateButton) {
+    generateButton.disabled = !enabled;
+  }
+  if (createCustomAliasButton) {
+    createCustomAliasButton.disabled = !enabled;
+  }
+}
+
+type CustomAliasResolution =
+  | {
+      ok: true;
+      alias: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+function resolveCustomAlias(inputValue: string, domain: string): CustomAliasResolution {
+  const normalizedDomain = normalizeDomain(domain);
+  const value = inputValue.trim().toLowerCase();
+
+  if (!value) {
+    return {
+      ok: false,
+      error: 'Enter an alias to recreate.'
+    };
+  }
+
+  if (value.includes('@')) {
+    const [localPart = '', domainPart = '', ...rest] = value.split('@');
+    if (!localPart || !domainPart || rest.length > 0) {
+      return {
+        ok: false,
+        error: 'Alias format is invalid.'
+      };
+    }
+
+    const normalizedInputDomain = normalizeDomain(domainPart);
+    if (normalizedInputDomain !== normalizedDomain) {
+      return {
+        ok: false,
+        error: `Alias domain must be ${normalizedDomain}.`
+      };
+    }
+
+    if (!CUSTOM_LOCAL_PART_REGEX.test(localPart)) {
+      return {
+        ok: false,
+        error: 'Alias name can only use letters, numbers, ".", "_", "+", "-".'
+      };
+    }
+
+    return {
+      ok: true,
+      alias: `${localPart}@${normalizedDomain}`
+    };
+  }
+
+  if (!CUSTOM_LOCAL_PART_REGEX.test(value)) {
+    return {
+      ok: false,
+      error: 'Alias name can only use letters, numbers, ".", "_", "+", "-".'
+    };
+  }
+
+  return {
+    ok: true,
+    alias: `${value}@${normalizedDomain}`
+  };
+}
+
+async function finalizeAliasFlow(alias: string, siteHost: string, siteSlug: string, source: AliasSource): Promise<void> {
+  latestSiteHost = siteHost;
+  latestSiteSlug = siteSlug;
+  setAliasValue(alias);
+
+  let cloudflareStatus: CloudflareStatus = 'exists';
+  let cloudflareError = '';
+  let cloudflareErrorCode = '';
+  let copyOk = true;
+
+  const cloudflareResponse = await sendRuntimeMessage({
+    type: 'CREATE_CLOUDFLARE_ALIAS',
+    alias
+  });
+
+  if (cloudflareResponse.ok) {
+    cloudflareStatus = cloudflareResponse.data.status;
+  } else {
+    cloudflareStatus = 'failed';
+    cloudflareError = cloudflareResponse.error;
+    cloudflareErrorCode = cloudflareResponse.code ?? 'API_ERROR';
+  }
+
+  try {
+    await copyAlias(alias);
+  } catch {
+    copyOk = false;
+  }
+
+  await sendRuntimeMessage({
+    type: 'SAVE_ALIAS_RECORD',
+    record: createHistoryRecord(cloudflareStatus, cloudflareErrorCode || undefined)
+  });
+
+  const aliasLabel = source === 'custom' ? 'Custom alias' : 'Alias';
+
+  if (!copyOk && cloudflareStatus === 'failed') {
+    setStatus(`${aliasLabel} ready but copy failed. Cloudflare: ${cloudflareError || 'error'}`);
+  } else if (!copyOk) {
+    setStatus(`${aliasLabel} ready but copy failed. Copy manually.`);
+  } else if (cloudflareStatus === 'failed') {
+    setStatus(`${aliasLabel} copied. Cloudflare: ${cloudflareError || 'error'}`);
+  } else if (cloudflareStatus === 'created') {
+    setStatus(`${aliasLabel} copied. Cloudflare routing updated.`);
+  } else {
+    setStatus(`${aliasLabel} copied. Cloudflare already configured.`);
+  }
+
+  await loadHistory();
+}
+
 async function handleGenerateFlow(): Promise<void> {
   if (!generateButton) {
     return;
   }
 
-  generateButton.disabled = true;
+  setActionsEnabled(false);
   if (fillButton) {
     fillButton.disabled = true;
   }
@@ -180,55 +310,45 @@ async function handleGenerateFlow(): Promise<void> {
       return;
     }
 
-    latestAlias = aliasResponse.data.alias;
-    latestSiteHost = aliasResponse.data.siteHost;
-    latestSiteSlug = aliasResponse.data.siteSlug;
-    setAliasValue(latestAlias);
-
-    let cloudflareStatus: CloudflareStatus = 'exists';
-    let cloudflareError = '';
-    let cloudflareErrorCode = '';
-    let copyOk = true;
-
-    const cloudflareResponse = await sendRuntimeMessage({
-      type: 'CREATE_CLOUDFLARE_ALIAS',
-      alias: latestAlias
-    });
-
-    if (cloudflareResponse.ok) {
-      cloudflareStatus = cloudflareResponse.data.status;
-    } else {
-      cloudflareStatus = 'failed';
-      cloudflareError = cloudflareResponse.error;
-      cloudflareErrorCode = cloudflareResponse.code ?? 'API_ERROR';
-    }
-
-    try {
-      await copyAlias(latestAlias);
-    } catch {
-      copyOk = false;
-    }
-
-    await sendRuntimeMessage({
-      type: 'SAVE_ALIAS_RECORD',
-      record: createHistoryRecord(cloudflareStatus, cloudflareErrorCode || undefined)
-    });
-
-    if (!copyOk && cloudflareStatus === 'failed') {
-      setStatus(`Alias generated but copy failed. Cloudflare: ${cloudflareError || 'error'}`);
-    } else if (!copyOk) {
-      setStatus('Alias generated but copy failed. Copy manually.');
-    } else if (cloudflareStatus === 'failed') {
-      setStatus(`Alias copied. Cloudflare: ${cloudflareError || 'error'}`);
-    } else if (cloudflareStatus === 'created') {
-      setStatus('Alias copied. Cloudflare routing updated.');
-    } else {
-      setStatus('Alias copied. Cloudflare already configured.');
-    }
-
-    await loadHistory();
+    await finalizeAliasFlow(
+      aliasResponse.data.alias,
+      aliasResponse.data.siteHost,
+      aliasResponse.data.siteSlug,
+      'generated'
+    );
   } finally {
-    generateButton.disabled = false;
+    setActionsEnabled(Boolean(configuredDomain));
+    if (fillButton) {
+      fillButton.disabled = !latestAlias;
+    }
+  }
+}
+
+async function handleCustomAliasFlow(): Promise<void> {
+  if (!createCustomAliasButton || !customAliasInput) {
+    return;
+  }
+
+  setActionsEnabled(false);
+  if (fillButton) {
+    fillButton.disabled = true;
+  }
+
+  try {
+    if (!configuredDomain || !isValidDomain(configuredDomain)) {
+      setStatus('Set a valid domain in options before creating a custom alias.');
+      return;
+    }
+
+    const resolved = resolveCustomAlias(customAliasInput.value, configuredDomain);
+    if (!resolved.ok) {
+      setStatus(resolved.error);
+      return;
+    }
+
+    await finalizeAliasFlow(resolved.alias, 'manual', 'custom', 'custom');
+  } finally {
+    setActionsEnabled(Boolean(configuredDomain));
     if (fillButton) {
       fillButton.disabled = !latestAlias;
     }
@@ -243,12 +363,13 @@ async function bootstrap(): Promise<void> {
 
   const normalizedDomain = normalizeDomain(settings.domain);
   const hasValidDomain = isValidDomain(normalizedDomain);
+  configuredDomain = normalizedDomain;
 
-  if (!hasValidDomain && generateButton) {
-    generateButton.disabled = true;
+  if (!hasValidDomain) {
+    setActionsEnabled(false);
     setStatus('Set a valid domain in options before generating aliases.');
-  } else if (generateButton) {
-    generateButton.disabled = false;
+  } else {
+    setActionsEnabled(true);
     setStatus('Ready.');
   }
 
@@ -270,6 +391,17 @@ async function bootstrap(): Promise<void> {
 
 generateButton?.addEventListener('click', () => {
   void handleGenerateFlow();
+});
+
+createCustomAliasButton?.addEventListener('click', () => {
+  void handleCustomAliasFlow();
+});
+
+customAliasInput?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    void handleCustomAliasFlow();
+  }
 });
 
 fillButton?.addEventListener('click', () => {

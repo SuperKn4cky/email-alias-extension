@@ -29,6 +29,20 @@
         <p class="panel-label">Quick action</p>
         <button id="generateBtn" type="button">Generate + Create + Copy</button>
         <button id="fillBtn" type="button" class="secondary" disabled>Fill email field</button>
+        <div class="custom-alias">
+          <label for="customAliasInput" class="panel-label panel-label-inline">Custom alias</label>
+          <div class="custom-row">
+            <input
+              id="customAliasInput"
+              class="custom-input"
+              type="text"
+              placeholder="old-alias or old-alias@your-domain.com"
+              spellcheck="false"
+              autocomplete="off"
+            />
+            <button id="createCustomAliasBtn" type="button" class="ghost custom-btn">Create</button>
+          </div>
+        </div>
         <p id="status" aria-live="polite">Configure your settings in Options first.</p>
       </section>
 
