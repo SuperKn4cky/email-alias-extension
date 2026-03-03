@@ -1,13 +1,14 @@
 import type { AliasRecord, CloudflareStatus, ExtensionSettings } from '../lib/types';
 import { sendRuntimeMessage } from '../lib/messages';
 import { initializeThemeToggle } from '../lib/theme';
-import { isValidDomain, normalizeDomain, sanitizeSettings } from '../lib/validation';
+import { isValidDomain, isValidEmail, normalizeDomain, sanitizeSettings } from '../lib/validation';
 
 const siteHint = document.querySelector<HTMLParagraphElement>('#siteHint');
 const statusNode = document.querySelector<HTMLParagraphElement>('#status');
 const aliasValueNode = document.querySelector<HTMLElement>('#aliasValue');
 const generateButton = document.querySelector<HTMLButtonElement>('#generateBtn');
 const fillButton = document.querySelector<HTMLButtonElement>('#fillBtn');
+const destinationRouteInput = document.querySelector<HTMLInputElement>('#destinationRouteInput');
 const customAliasInput = document.querySelector<HTMLInputElement>('#customAliasInput');
 const createCustomAliasButton = document.querySelector<HTMLButtonElement>('#createCustomAliasBtn');
 const historyList = document.querySelector<HTMLUListElement>('#historyList');
@@ -15,9 +16,11 @@ const refreshHistoryButton = document.querySelector<HTMLButtonElement>('#refresh
 const themeToggleButton = document.querySelector<HTMLButtonElement>('#themeToggle');
 
 let latestAlias = '';
+let latestDestinationEmail = '';
 let latestSiteHost = 'manual';
 let latestSiteSlug = 'manual';
 let configuredDomain = '';
+let configuredDefaultDestinationEmail = '';
 
 const CUSTOM_LOCAL_PART_REGEX = /^[a-z0-9](?:[a-z0-9._+-]{0,62}[a-z0-9])?$/i;
 type AliasSource = 'generated' | 'custom';
@@ -67,17 +70,65 @@ function renderHistory(items: AliasRecord[]): void {
   for (const item of items.slice(0, 12)) {
     const line = document.createElement('li');
 
+    const head = document.createElement('div');
+    head.className = 'history-item-head';
+
     const alias = document.createElement('code');
     alias.textContent = item.alias;
 
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'ghost history-delete';
+    deleteButton.textContent = 'Delete';
+    deleteButton.addEventListener('click', () => {
+      void handleDeleteHistoryRecord(item);
+    });
+
+    head.appendChild(alias);
+    head.appendChild(deleteButton);
+
     const details = document.createElement('span');
     const date = new Date(item.createdAt).toLocaleString();
-    details.textContent = `${item.siteSlug} • ${item.cloudflareStatus} • ${date}`;
+    const destination = item.destinationEmail ? ` -> ${item.destinationEmail}` : '';
+    details.textContent = `${item.siteSlug} • ${item.cloudflareStatus}${destination} • ${date}`;
 
-    line.appendChild(alias);
+    line.appendChild(head);
     line.appendChild(details);
     historyList.appendChild(line);
   }
+}
+
+async function handleDeleteHistoryRecord(record: AliasRecord): Promise<void> {
+  const cloudflareDelete = await sendRuntimeMessage({
+    type: 'DELETE_CLOUDFLARE_ALIAS',
+    alias: record.alias,
+    destinationEmail: record.destinationEmail
+  });
+
+  if (!cloudflareDelete.ok) {
+    setStatus(`Unable to delete on Cloudflare: ${cloudflareDelete.error}`);
+    return;
+  }
+
+  const historyDelete = await sendRuntimeMessage({
+    type: 'DELETE_HISTORY_RECORD',
+    id: record.id
+  });
+
+  if (!historyDelete.ok) {
+    setStatus(`Unable to delete alias: ${historyDelete.error}`);
+    return;
+  }
+
+  if (historyDelete.data.deleted && cloudflareDelete.data.status === 'deleted') {
+    setStatus('Alias deleted from Cloudflare and history.');
+  } else if (historyDelete.data.deleted) {
+    setStatus('Alias removed from history. No Cloudflare rule was found.');
+  } else {
+    setStatus('Alias already removed.');
+  }
+
+  await loadHistory();
 }
 
 async function loadHistory(): Promise<void> {
@@ -155,11 +206,46 @@ function createHistoryRecord(status: CloudflareStatus, errorCode?: string): Alia
   return {
     id: crypto.randomUUID(),
     alias: latestAlias,
+    destinationEmail: latestDestinationEmail,
     siteHost: latestSiteHost,
     siteSlug: latestSiteSlug,
     createdAt: new Date().toISOString(),
     cloudflareStatus: status,
     errorCode
+  };
+}
+
+type DestinationResolution =
+  | {
+      ok: true;
+      destinationEmail: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+function resolveDestinationEmail(): DestinationResolution {
+  const fromPopup = destinationRouteInput?.value.trim().toLowerCase() ?? '';
+  const destinationEmail = fromPopup || configuredDefaultDestinationEmail;
+
+  if (!destinationEmail) {
+    return {
+      ok: false,
+      error: 'Set a destination email in options or enter one in the popup.'
+    };
+  }
+
+  if (!isValidEmail(destinationEmail)) {
+    return {
+      ok: false,
+      error: 'Destination email is invalid.'
+    };
+  }
+
+  return {
+    ok: true,
+    destinationEmail
   };
 }
 
@@ -236,9 +322,16 @@ function resolveCustomAlias(inputValue: string, domain: string): CustomAliasReso
   };
 }
 
-async function finalizeAliasFlow(alias: string, siteHost: string, siteSlug: string, source: AliasSource): Promise<void> {
+async function finalizeAliasFlow(
+  alias: string,
+  destinationEmail: string,
+  siteHost: string,
+  siteSlug: string,
+  source: AliasSource
+): Promise<void> {
   latestSiteHost = siteHost;
   latestSiteSlug = siteSlug;
+  latestDestinationEmail = destinationEmail;
   setAliasValue(alias);
 
   let cloudflareStatus: CloudflareStatus = 'exists';
@@ -248,7 +341,8 @@ async function finalizeAliasFlow(alias: string, siteHost: string, siteSlug: stri
 
   const cloudflareResponse = await sendRuntimeMessage({
     type: 'CREATE_CLOUDFLARE_ALIAS',
-    alias
+    alias,
+    destinationEmail
   });
 
   if (cloudflareResponse.ok) {
@@ -310,8 +404,15 @@ async function handleGenerateFlow(): Promise<void> {
       return;
     }
 
+    const destination = resolveDestinationEmail();
+    if (!destination.ok) {
+      setStatus(destination.error);
+      return;
+    }
+
     await finalizeAliasFlow(
       aliasResponse.data.alias,
+      destination.destinationEmail,
       aliasResponse.data.siteHost,
       aliasResponse.data.siteSlug,
       'generated'
@@ -346,7 +447,13 @@ async function handleCustomAliasFlow(): Promise<void> {
       return;
     }
 
-    await finalizeAliasFlow(resolved.alias, 'manual', 'custom', 'custom');
+    const destination = resolveDestinationEmail();
+    if (!destination.ok) {
+      setStatus(destination.error);
+      return;
+    }
+
+    await finalizeAliasFlow(resolved.alias, destination.destinationEmail, 'manual', 'custom', 'custom');
   } finally {
     setActionsEnabled(Boolean(configuredDomain));
     if (fillButton) {
@@ -364,6 +471,11 @@ async function bootstrap(): Promise<void> {
   const normalizedDomain = normalizeDomain(settings.domain);
   const hasValidDomain = isValidDomain(normalizedDomain);
   configuredDomain = normalizedDomain;
+  configuredDefaultDestinationEmail = settings.destinationEmail.trim().toLowerCase();
+
+  if (destinationRouteInput && configuredDefaultDestinationEmail) {
+    destinationRouteInput.value = configuredDefaultDestinationEmail;
+  }
 
   if (!hasValidDomain) {
     setActionsEnabled(false);

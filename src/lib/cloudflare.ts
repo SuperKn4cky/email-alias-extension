@@ -1,6 +1,7 @@
 import type { ExtensionSettings } from './types';
 
 export type CloudflareEnsureStatus = 'created' | 'exists';
+export type CloudflareDeleteStatus = 'deleted' | 'not_found';
 
 export type CloudflareErrorCode =
   | 'AUTH_ERROR'
@@ -22,10 +23,25 @@ interface DestinationAddress {
   verified?: boolean;
 }
 
-interface CatchAllRule {
-  enabled?: boolean;
-  actions?: Array<{ type?: string; value?: string[] }>;
+interface EmailRoutingRuleMatcher {
+  field?: string;
+  type?: string;
+  value?: string;
 }
+
+interface EmailRoutingRuleAction {
+  type?: string;
+  value?: string[];
+}
+
+interface EmailRoutingRule {
+  id?: string;
+  enabled?: boolean;
+  matchers?: EmailRoutingRuleMatcher[];
+  actions?: EmailRoutingRuleAction[];
+}
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {
   const normalized: Record<string, string> = {};
@@ -48,6 +64,117 @@ function normalizeHeaders(headers: HeadersInit | undefined): Record<string, stri
   }
 
   return { ...headers };
+}
+
+function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function isValidEmail(value: string): boolean {
+  return EMAIL_REGEX.test(normalizeEmail(value));
+}
+
+function extractAddressList(result: unknown): DestinationAddress[] {
+  if (Array.isArray(result)) {
+    return result as DestinationAddress[];
+  }
+
+  if (typeof result === 'object' && result !== null) {
+    const objectResult = result as { items?: unknown; addresses?: unknown };
+    if (Array.isArray(objectResult.items)) {
+      return objectResult.items as DestinationAddress[];
+    }
+    if (Array.isArray(objectResult.addresses)) {
+      return objectResult.addresses as DestinationAddress[];
+    }
+  }
+
+  return [];
+}
+
+function extractRuleList(result: unknown): EmailRoutingRule[] {
+  if (Array.isArray(result)) {
+    return result as EmailRoutingRule[];
+  }
+
+  if (typeof result === 'object' && result !== null) {
+    const objectResult = result as { items?: unknown; rules?: unknown };
+    if (Array.isArray(objectResult.items)) {
+      return objectResult.items as EmailRoutingRule[];
+    }
+    if (Array.isArray(objectResult.rules)) {
+      return objectResult.rules as EmailRoutingRule[];
+    }
+  }
+
+  return [];
+}
+
+function hasAliasMatcher(rule: EmailRoutingRule, alias: string): boolean {
+  const target = alias.toLowerCase();
+  if (!Array.isArray(rule.matchers)) {
+    return false;
+  }
+
+  return rule.matchers.some((matcher) => {
+    if (!matcher || matcher.field !== 'to' || typeof matcher.value !== 'string') {
+      return false;
+    }
+    return matcher.value.toLowerCase() === target;
+  });
+}
+
+function forwardsToDestination(rule: EmailRoutingRule, destinationEmail: string): boolean {
+  if (!Array.isArray(rule.actions)) {
+    return false;
+  }
+
+  const normalizedDestination = normalizeEmail(destinationEmail);
+  return rule.actions.some((action) => {
+    if (action.type !== 'forward' || !Array.isArray(action.value)) {
+      return false;
+    }
+
+    return action.value.some((email) => normalizeEmail(email) === normalizedDestination);
+  });
+}
+
+function findAliasRule(
+  rules: EmailRoutingRule[],
+  alias: string,
+  destinationEmail?: string
+): EmailRoutingRule | null {
+  const aliasRules = rules.filter((rule) => hasAliasMatcher(rule, alias));
+  if (aliasRules.length === 0) {
+    return null;
+  }
+
+  if (destinationEmail) {
+    const exact = aliasRules.find((rule) => forwardsToDestination(rule, destinationEmail));
+    if (exact) {
+      return exact;
+    }
+  }
+
+  return aliasRules[0] ?? null;
+}
+
+function getDestinationForCreate(settings: ExtensionSettings, destinationEmailOverride?: string): string {
+  const candidate = normalizeEmail(destinationEmailOverride || settings.destinationEmail);
+  if (!candidate || !isValidEmail(candidate)) {
+    throw new CloudflareApiError('INVALID_CONFIG', 'A valid destination email is required.');
+  }
+  return candidate;
+}
+
+function getDestinationForDelete(settings: ExtensionSettings, destinationEmailOverride?: string): string | undefined {
+  const override = normalizeEmail(destinationEmailOverride ?? '');
+  if (override) {
+    return isValidEmail(override) ? override : undefined;
+  }
+
+  const fallback = normalizeEmail(settings.destinationEmail);
+  return fallback && isValidEmail(fallback) ? fallback : undefined;
 }
 
 export class CloudflareApiError extends Error {
@@ -100,38 +227,6 @@ export function cloudflareErrorMessage(code: CloudflareErrorCode): string {
   }
 }
 
-function extractAddressList(result: unknown): DestinationAddress[] {
-  if (Array.isArray(result)) {
-    return result as DestinationAddress[];
-  }
-
-  if (typeof result === 'object' && result !== null) {
-    const objectResult = result as { items?: unknown; addresses?: unknown };
-    if (Array.isArray(objectResult.items)) {
-      return objectResult.items as DestinationAddress[];
-    }
-    if (Array.isArray(objectResult.addresses)) {
-      return objectResult.addresses as DestinationAddress[];
-    }
-  }
-
-  return [];
-}
-
-function hasForwardToDestination(rule: CatchAllRule | null, destinationEmail: string): boolean {
-  if (!rule?.enabled || !Array.isArray(rule.actions)) {
-    return false;
-  }
-
-  return rule.actions.some((action) => {
-    if (action.type !== 'forward' || !Array.isArray(action.value)) {
-      return false;
-    }
-
-    return action.value.some((email) => email.toLowerCase() === destinationEmail.toLowerCase());
-  });
-}
-
 async function cloudflareRequest<T>(
   path: string,
   apiToken: string,
@@ -173,7 +268,19 @@ async function cloudflareRequest<T>(
   };
 }
 
-async function ensureDestinationAddress(settings: ExtensionSettings): Promise<CloudflareEnsureStatus> {
+async function listAliasRules(settings: ExtensionSettings): Promise<EmailRoutingRule[]> {
+  const response = await cloudflareRequest<unknown>(
+    `/zones/${settings.zoneId}/email/routing/rules`,
+    settings.apiToken,
+    { method: 'GET' }
+  );
+  return extractRuleList(response.result);
+}
+
+async function ensureDestinationAddress(
+  settings: ExtensionSettings,
+  destinationEmail: string
+): Promise<CloudflareEnsureStatus> {
   const listResponse = await cloudflareRequest<unknown>(
     `/accounts/${settings.accountId}/email/routing/addresses`,
     settings.apiToken,
@@ -183,9 +290,7 @@ async function ensureDestinationAddress(settings: ExtensionSettings): Promise<Cl
   );
 
   const addresses = extractAddressList(listResponse.result);
-  const existing = addresses.find(
-    (item) => item.email?.toLowerCase() === settings.destinationEmail.toLowerCase()
-  );
+  const existing = addresses.find((item) => normalizeEmail(item.email ?? '') === destinationEmail);
 
   if (existing) {
     if (existing.verified === false) {
@@ -204,7 +309,7 @@ async function ensureDestinationAddress(settings: ExtensionSettings): Promise<Cl
     {
       method: 'POST',
       body: JSON.stringify({
-        email: settings.destinationEmail
+        email: destinationEmail
       })
     }
   );
@@ -219,48 +324,54 @@ async function ensureDestinationAddress(settings: ExtensionSettings): Promise<Cl
   return 'created';
 }
 
-async function getCatchAllRule(settings: ExtensionSettings): Promise<CatchAllRule | null> {
-  try {
-    const response = await cloudflareRequest<CatchAllRule>(
-      `/zones/${settings.zoneId}/email/routing/rules/catch_all`,
-      settings.apiToken,
-      {
-        method: 'GET'
-      }
-    );
+async function ensureAliasRule(
+  settings: ExtensionSettings,
+  alias: string,
+  destinationEmail: string
+): Promise<CloudflareEnsureStatus> {
+  const rules = await listAliasRules(settings);
+  const existing = findAliasRule(rules, alias, destinationEmail);
 
-    return response.result;
-  } catch (error) {
-    if (error instanceof CloudflareApiError && error.code === 'NOT_FOUND') {
-      return null;
-    }
-
-    throw error;
-  }
-}
-
-async function ensureCatchAllRule(settings: ExtensionSettings): Promise<CloudflareEnsureStatus> {
-  const current = await getCatchAllRule(settings);
-
-  if (hasForwardToDestination(current, settings.destinationEmail)) {
+  if (existing?.enabled && forwardsToDestination(existing, destinationEmail)) {
     return 'exists';
   }
 
-  await cloudflareRequest<CatchAllRule>(
-    `/zones/${settings.zoneId}/email/routing/rules/catch_all`,
+  const payload = {
+    name: `Alias ${alias}`,
+    enabled: true,
+    matchers: [
+      {
+        type: 'literal',
+        field: 'to',
+        value: alias
+      }
+    ],
+    actions: [
+      {
+        type: 'forward',
+        value: [destinationEmail]
+      }
+    ]
+  };
+
+  if (existing?.id) {
+    await cloudflareRequest<EmailRoutingRule>(
+      `/zones/${settings.zoneId}/email/routing/rules/${existing.id}`,
+      settings.apiToken,
+      {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      }
+    );
+    return 'created';
+  }
+
+  await cloudflareRequest<EmailRoutingRule>(
+    `/zones/${settings.zoneId}/email/routing/rules`,
     settings.apiToken,
     {
-      method: 'PUT',
-      body: JSON.stringify({
-        name: 'Catch all',
-        enabled: true,
-        actions: [
-          {
-            type: 'forward',
-            value: [settings.destinationEmail]
-          }
-        ]
-      })
+      method: 'POST',
+      body: JSON.stringify(payload)
     }
   );
 
@@ -269,16 +380,38 @@ async function ensureCatchAllRule(settings: ExtensionSettings): Promise<Cloudfla
 
 export async function createOrEnsureAliasRouting(
   settings: ExtensionSettings,
-  alias: string
+  alias: string,
+  destinationEmailOverride?: string
 ): Promise<CloudflareEnsureStatus> {
   if (!alias.includes('@')) {
     throw new CloudflareApiError('API_ERROR', 'Generated alias format is invalid.');
   }
 
-  const addressStatus = await ensureDestinationAddress(settings);
-  const ruleStatus = await ensureCatchAllRule(settings);
+  const destinationEmail = getDestinationForCreate(settings, destinationEmailOverride);
+  const addressStatus = await ensureDestinationAddress(settings, destinationEmail);
+  const ruleStatus = await ensureAliasRule(settings, alias.toLowerCase(), destinationEmail);
 
   return addressStatus === 'created' || ruleStatus === 'created' ? 'created' : 'exists';
+}
+
+export async function deleteAliasRouting(
+  settings: ExtensionSettings,
+  alias: string,
+  destinationEmailOverride?: string
+): Promise<CloudflareDeleteStatus> {
+  const destinationEmail = getDestinationForDelete(settings, destinationEmailOverride);
+  const rules = await listAliasRules(settings);
+  const target = findAliasRule(rules, alias.toLowerCase(), destinationEmail);
+
+  if (!target?.id) {
+    return 'not_found';
+  }
+
+  await cloudflareRequest<unknown>(`/zones/${settings.zoneId}/email/routing/rules/${target.id}`, settings.apiToken, {
+    method: 'DELETE'
+  });
+
+  return 'deleted';
 }
 
 export async function testCloudflareAccess(settings: ExtensionSettings): Promise<void> {
@@ -286,5 +419,5 @@ export async function testCloudflareAccess(settings: ExtensionSettings): Promise
     method: 'GET'
   });
 
-  await getCatchAllRule(settings);
+  await listAliasRules(settings);
 }

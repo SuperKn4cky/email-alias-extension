@@ -351,9 +351,38 @@ button:disabled {
   padding: 8px;
 }
 
+.history-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.history-item-head code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .history li code {
   font-size: 12px;
   color: var(--history-code);
+}
+
+.history-delete {
+  flex-shrink: 0;
+  padding: 4px 7px;
+  font-size: 10px;
+  line-height: 1.1;
+  letter-spacing: 0.02em;
+}
+
+.history-delete::before {
+  content: none;
+}
+
+.history-delete:hover:not(:disabled) {
+  transform: none;
+  filter: none;
 }
 
 .history li span {

@@ -57,9 +57,5 @@ export function initializeThemeToggle(button: HTMLButtonElement | null): void {
     setToggleCopy(button, systemTheme);
   };
 
-  if ('addEventListener' in mediaQuery) {
-    mediaQuery.addEventListener('change', updateFromSystem);
-  } else {
-    mediaQuery.addListener(updateFromSystem);
-  }
+  mediaQuery.addEventListener('change', updateFromSystem);
 }

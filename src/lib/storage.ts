@@ -45,3 +45,18 @@ export async function clearHistory(): Promise<void> {
     [HISTORY_KEY]: []
   });
 }
+
+export async function deleteHistoryRecord(recordId: string): Promise<boolean> {
+  const current = await getHistory();
+  const next = current.filter((item) => item.id !== recordId);
+
+  if (next.length === current.length) {
+    return false;
+  }
+
+  await chrome.storage.local.set({
+    [HISTORY_KEY]: next
+  });
+
+  return true;
+}

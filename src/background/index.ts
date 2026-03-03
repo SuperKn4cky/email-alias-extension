@@ -3,11 +3,12 @@ import {
   CloudflareApiError,
   cloudflareErrorMessage,
   createOrEnsureAliasRouting,
+  deleteAliasRouting,
   mapCloudflareErrorCode,
   testCloudflareAccess
 } from '../lib/cloudflare';
 import type { RuntimeRequest, RuntimeResponse } from '../lib/messages';
-import { addHistoryRecord, clearHistory, getHistory, getSettings } from '../lib/storage';
+import { addHistoryRecord, clearHistory, deleteHistoryRecord, getHistory, getSettings } from '../lib/storage';
 import type { ExtensionSettings } from '../lib/types';
 import { isValidDomain, sanitizeSettings, validateSettings } from '../lib/validation';
 
@@ -52,15 +53,53 @@ async function handleGenerateAlias(tabUrl?: string): Promise<RuntimeResponse> {
   };
 }
 
-async function handleCreateCloudflareAlias(alias: string): Promise<RuntimeResponse> {
+async function handleCreateCloudflareAlias(alias: string, destinationEmail?: string): Promise<RuntimeResponse> {
   const settings = sanitizeSettings(await getSettings());
-  const settingsValidation = invalidSettingsResponse(settings);
+  const settingsValidation = invalidSettingsResponse({
+    ...settings,
+    destinationEmail: destinationEmail ?? settings.destinationEmail
+  });
   if (!settingsValidation.ok) {
     return settingsValidation;
   }
 
   try {
-    const status = await createOrEnsureAliasRouting(settings, alias);
+    const status = await createOrEnsureAliasRouting(settings, alias, destinationEmail);
+    return {
+      ok: true,
+      data: {
+        status
+      }
+    };
+  } catch (error) {
+    if (error instanceof CloudflareApiError) {
+      return {
+        ok: false,
+        error: error.message,
+        code: error.code
+      };
+    }
+
+    return {
+      ok: false,
+      error: cloudflareErrorMessage('API_ERROR'),
+      code: 'API_ERROR'
+    };
+  }
+}
+
+async function handleDeleteCloudflareAlias(alias: string, destinationEmail?: string): Promise<RuntimeResponse> {
+  const settings = sanitizeSettings(await getSettings());
+  const settingsValidation = invalidSettingsResponse({
+    ...settings,
+    destinationEmail: destinationEmail ?? settings.destinationEmail
+  });
+  if (!settingsValidation.ok) {
+    return settingsValidation;
+  }
+
+  try {
+    const status = await deleteAliasRouting(settings, alias, destinationEmail);
     return {
       ok: true,
       data: {
@@ -121,7 +160,9 @@ async function handleRequest(request: RuntimeRequest): Promise<RuntimeResponse> 
     case 'GENERATE_ALIAS':
       return handleGenerateAlias(request.tabUrl);
     case 'CREATE_CLOUDFLARE_ALIAS':
-      return handleCreateCloudflareAlias(request.alias);
+      return handleCreateCloudflareAlias(request.alias, request.destinationEmail);
+    case 'DELETE_CLOUDFLARE_ALIAS':
+      return handleDeleteCloudflareAlias(request.alias, request.destinationEmail);
     case 'SAVE_ALIAS_RECORD':
       await addHistoryRecord(request.record);
       return {
@@ -136,6 +177,15 @@ async function handleRequest(request: RuntimeRequest): Promise<RuntimeResponse> 
         ok: true,
         data: {
           items
+        }
+      };
+    }
+    case 'DELETE_HISTORY_RECORD': {
+      const deleted = await deleteHistoryRecord(request.id);
+      return {
+        ok: true,
+        data: {
+          deleted
         }
       };
     }

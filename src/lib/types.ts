@@ -3,6 +3,7 @@ export type CloudflareStatus = 'created' | 'exists' | 'failed';
 export interface AliasRecord {
   id: string;
   alias: string;
+  destinationEmail?: string;
   siteHost: string;
   siteSlug: string;
   createdAt: string;
