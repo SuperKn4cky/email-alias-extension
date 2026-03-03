@@ -7,6 +7,7 @@
     "clean": "node -e \"const fs=require('node:fs'); for (const p of ['dist','release']) fs.rmSync(p,{ recursive:true, force:true });\"",
     "dev": "vite build --watch",
     "build": "vite build",
+    "package": "npm run build && mkdir -p release && rm -f release/email-alias-extension-release.zip && (cd dist && python3 -m zipfile -c ../release/email-alias-extension-release.zip .)",
     "build:clean": "npm run clean && npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
