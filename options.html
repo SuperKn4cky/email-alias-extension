@@ -8,36 +8,70 @@
   </head>
   <body>
     <main class="options">
-      <header>
-        <h1>Email Alias Options</h1>
-        <p>Set your domain and Cloudflare credentials once.</p>
+      <button
+        id="themeToggle"
+        class="theme-toggle"
+        type="button"
+        aria-label="Activer le mode sombre"
+        title="Activer le mode sombre"
+      >
+        <span class="theme-icon sun" aria-hidden="true">☀</span>
+        <span class="theme-icon moon" aria-hidden="true">🌙</span>
+      </button>
+
+      <header class="hero">
+        <p class="eyebrow">Control center</p>
+        <h1>Email Alias Configuration</h1>
+        <p>Set your domain, forwarding address, and Cloudflare credentials in one place.</p>
       </header>
 
       <form id="settingsForm" novalidate>
-        <label>
-          Domain
-          <input id="domain" name="domain" type="text" placeholder="example.com" required />
-        </label>
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Alias routing</h2>
+            <span class="badge">Required</span>
+          </div>
+          <div class="field-grid">
+            <label>
+              Domain
+              <input id="domain" name="domain" type="text" placeholder="example.com" required />
+            </label>
 
-        <label>
-          Forward destination email
-          <input id="destinationEmail" name="destinationEmail" type="email" placeholder="you@gmail.com" required />
-        </label>
+            <label>
+              Forward destination email
+              <input
+                id="destinationEmail"
+                name="destinationEmail"
+                type="email"
+                placeholder="you@gmail.com"
+                required
+              />
+            </label>
+          </div>
+        </section>
 
-        <label>
-          Cloudflare Account ID
-          <input id="accountId" name="accountId" type="text" required />
-        </label>
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Cloudflare access</h2>
+            <span class="badge">Secure</span>
+          </div>
+          <div class="field-grid field-grid-stack">
+            <label>
+              Cloudflare Account ID
+              <input id="accountId" name="accountId" type="text" required />
+            </label>
 
-        <label>
-          Cloudflare Zone ID
-          <input id="zoneId" name="zoneId" type="text" required />
-        </label>
+            <label>
+              Cloudflare Zone ID
+              <input id="zoneId" name="zoneId" type="text" required />
+            </label>
 
-        <label>
-          Cloudflare API Token
-          <input id="apiToken" name="apiToken" type="password" required />
-        </label>
+            <label>
+              Cloudflare API Token
+              <input id="apiToken" name="apiToken" type="password" required />
+            </label>
+          </div>
+        </section>
 
         <div class="actions">
           <button id="saveBtn" type="submit">Save</button>

@@ -8,19 +8,35 @@
   </head>
   <body>
     <main class="popup">
-      <header>
-        <h1>Email Alias</h1>
+      <button
+        id="themeToggle"
+        class="theme-toggle"
+        type="button"
+        aria-label="Activer le mode sombre"
+        title="Activer le mode sombre"
+      >
+        <span class="theme-icon sun" aria-hidden="true">☀</span>
+        <span class="theme-icon moon" aria-hidden="true">🌙</span>
+      </button>
+
+      <header class="hero">
+        <p class="eyebrow">Smart relay</p>
+        <h1>Email Alias Studio</h1>
         <p id="siteHint">Current site: -</p>
       </header>
 
-      <section class="panel">
+      <section class="panel panel-primary">
+        <p class="panel-label">Quick action</p>
         <button id="generateBtn" type="button">Generate + Create + Copy</button>
         <button id="fillBtn" type="button" class="secondary" disabled>Fill email field</button>
         <p id="status" aria-live="polite">Configure your settings in Options first.</p>
       </section>
 
       <section class="panel alias-panel">
-        <h2>Last alias</h2>
+        <div class="row row-tight">
+          <h2>Last alias</h2>
+          <span class="pill">Clipboard ready</span>
+        </div>
         <code id="aliasValue">-</code>
       </section>
 

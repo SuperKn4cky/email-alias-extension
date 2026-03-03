@@ -1,5 +1,6 @@
 import type { AliasRecord, CloudflareStatus, ExtensionSettings } from '../lib/types';
 import { sendRuntimeMessage } from '../lib/messages';
+import { initializeThemeToggle } from '../lib/theme';
 import { isValidDomain, normalizeDomain, sanitizeSettings } from '../lib/validation';
 
 const siteHint = document.querySelector<HTMLParagraphElement>('#siteHint');
@@ -9,6 +10,7 @@ const generateButton = document.querySelector<HTMLButtonElement>('#generateBtn')
 const fillButton = document.querySelector<HTMLButtonElement>('#fillBtn');
 const historyList = document.querySelector<HTMLUListElement>('#historyList');
 const refreshHistoryButton = document.querySelector<HTMLButtonElement>('#refreshHistoryBtn');
+const themeToggleButton = document.querySelector<HTMLButtonElement>('#themeToggle');
 
 let latestAlias = '';
 let latestSiteHost = 'manual';
@@ -288,5 +290,7 @@ fillButton?.addEventListener('click', () => {
 refreshHistoryButton?.addEventListener('click', () => {
   void loadHistory();
 });
+
+initializeThemeToggle(themeToggleButton);
 
 void bootstrap();

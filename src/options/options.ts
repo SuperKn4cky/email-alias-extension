@@ -1,5 +1,6 @@
 import { sendRuntimeMessage } from '../lib/messages';
 import { getSettings, saveSettings } from '../lib/storage';
+import { initializeThemeToggle } from '../lib/theme';
 import type { ExtensionSettings } from '../lib/types';
 import { sanitizeSettings, validateSettings } from '../lib/validation';
 
@@ -12,6 +13,7 @@ const zoneIdInput = document.querySelector<HTMLInputElement>('#zoneId');
 const apiTokenInput = document.querySelector<HTMLInputElement>('#apiToken');
 const testButton = document.querySelector<HTMLButtonElement>('#testBtn');
 const clearHistoryButton = document.querySelector<HTMLButtonElement>('#clearHistoryBtn');
+const themeToggleButton = document.querySelector<HTMLButtonElement>('#themeToggle');
 
 function setStatus(message: string): void {
   if (statusNode) {
@@ -102,5 +104,7 @@ clearHistoryButton?.addEventListener('click', () => {
     }
   });
 });
+
+initializeThemeToggle(themeToggleButton);
 
 void bootstrap();
