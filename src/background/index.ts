@@ -4,13 +4,14 @@ import {
   cloudflareErrorMessage,
   createOrEnsureAliasRouting,
   deleteAliasRouting,
+  listAliasRecordsForDestination,
   mapCloudflareErrorCode,
   testCloudflareAccess
 } from '../lib/cloudflare';
 import type { RuntimeRequest, RuntimeResponse } from '../lib/messages';
-import { addHistoryRecord, clearHistory, deleteHistoryRecord, getHistory, getSettings } from '../lib/storage';
+import { addHistoryRecord, clearHistory, deleteHistoryRecord, getHistory, getSettings, mergeHistoryRecords } from '../lib/storage';
 import type { ExtensionSettings } from '../lib/types';
-import { isValidDomain, sanitizeSettings, validateSettings } from '../lib/validation';
+import { isValidDomain, isValidEmail, sanitizeSettings, validateSettings } from '../lib/validation';
 
 function invalidSettingsResponse(settings: ExtensionSettings): RuntimeResponse {
   const errors = validateSettings(settings);
@@ -155,6 +156,70 @@ async function handleTestCloudflare(): Promise<RuntimeResponse> {
   }
 }
 
+function canSyncHistory(settings: ExtensionSettings, destinationEmail?: string): destinationEmail is string {
+  return Boolean(
+    destinationEmail &&
+      isValidEmail(destinationEmail) &&
+      settings.accountId &&
+      settings.zoneId &&
+      settings.apiToken
+  );
+}
+
+async function handleGetHistory(destinationEmail?: string): Promise<RuntimeResponse> {
+  const items = await getHistory();
+  const settings = sanitizeSettings(await getSettings());
+  const normalizedDestination = destinationEmail?.trim().toLowerCase();
+
+  if (!canSyncHistory(settings, normalizedDestination)) {
+    return {
+      ok: true,
+      data: {
+        items,
+        sync: {
+          attempted: false,
+          imported: 0
+        }
+      }
+    };
+  }
+
+  try {
+    const syncedItems = await listAliasRecordsForDestination(settings, normalizedDestination);
+    const existingAliases = new Set(items.map((item) => item.alias.trim().toLowerCase()));
+    const imported = syncedItems.filter((item) => !existingAliases.has(item.alias)).length;
+    const mergedItems = await mergeHistoryRecords(syncedItems);
+
+    return {
+      ok: true,
+      data: {
+        items: mergedItems,
+        sync: {
+          attempted: true,
+          imported
+        }
+      }
+    };
+  } catch (error) {
+    const message =
+      error instanceof CloudflareApiError
+        ? error.message
+        : cloudflareErrorMessage(mapCloudflareErrorCode());
+
+    return {
+      ok: true,
+      data: {
+        items,
+        sync: {
+          attempted: true,
+          imported: 0,
+          error: message
+        }
+      }
+    };
+  }
+}
+
 async function handleRequest(request: RuntimeRequest): Promise<RuntimeResponse> {
   switch (request.type) {
     case 'GENERATE_ALIAS':
@@ -171,15 +236,8 @@ async function handleRequest(request: RuntimeRequest): Promise<RuntimeResponse> 
           saved: true
         }
       };
-    case 'GET_HISTORY': {
-      const items = await getHistory();
-      return {
-        ok: true,
-        data: {
-          items
-        }
-      };
-    }
+    case 'GET_HISTORY':
+      return handleGetHistory(request.destinationEmail);
     case 'DELETE_HISTORY_RECORD': {
       const deleted = await deleteHistoryRecord(request.id);
       return {

@@ -6,7 +6,7 @@ export type RuntimeRequest =
   | { type: 'CREATE_CLOUDFLARE_ALIAS'; alias: string; destinationEmail?: string }
   | { type: 'DELETE_CLOUDFLARE_ALIAS'; alias: string; destinationEmail?: string }
   | { type: 'SAVE_ALIAS_RECORD'; record: AliasRecord }
-  | { type: 'GET_HISTORY' }
+  | { type: 'GET_HISTORY'; destinationEmail?: string }
   | { type: 'DELETE_HISTORY_RECORD'; id: string }
   | { type: 'GET_SETTINGS' }
   | { type: 'TEST_CLOUDFLARE' }
@@ -17,7 +17,14 @@ export interface RuntimeResponseMap {
   CREATE_CLOUDFLARE_ALIAS: { status: CloudflareEnsureStatus };
   DELETE_CLOUDFLARE_ALIAS: { status: 'deleted' | 'not_found' };
   SAVE_ALIAS_RECORD: { saved: true };
-  GET_HISTORY: { items: AliasRecord[] };
+  GET_HISTORY: {
+    items: AliasRecord[];
+    sync: {
+      attempted: boolean;
+      imported: number;
+      error?: string;
+    };
+  };
   DELETE_HISTORY_RECORD: { deleted: boolean };
   GET_SETTINGS: { settings: ExtensionSettings };
   TEST_CLOUDFLARE: { ok: true };

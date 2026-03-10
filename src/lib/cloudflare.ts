@@ -1,4 +1,4 @@
-import type { ExtensionSettings } from './types';
+import type { AliasRecord, ExtensionSettings } from './types';
 
 export type CloudflareEnsureStatus = 'created' | 'exists';
 export type CloudflareDeleteStatus = 'deleted' | 'not_found';
@@ -15,6 +15,13 @@ interface CloudflareEnvelope<T> {
   success: boolean;
   errors?: Array<{ code: number; message: string }>;
   result: T;
+  result_info?: {
+    count?: number;
+    page?: number;
+    per_page?: number;
+    total_count?: number;
+    total_pages?: number;
+  };
 }
 
 interface DestinationAddress {
@@ -42,6 +49,7 @@ interface EmailRoutingRule {
 }
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const CLOUDFLARE_PAGE_SIZE = 100;
 
 function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {
   const normalized: Record<string, string> = {};
@@ -159,6 +167,36 @@ function findAliasRule(
   return aliasRules[0] ?? null;
 }
 
+function extractAliasFromRule(rule: EmailRoutingRule): string | null {
+  if (!Array.isArray(rule.matchers)) {
+    return null;
+  }
+
+  const matcher = rule.matchers.find((item) => item?.field === 'to' && typeof item.value === 'string');
+  if (!matcher?.value || !matcher.value.includes('@')) {
+    return null;
+  }
+
+  return normalizeEmail(matcher.value);
+}
+
+function inferSyncedAliasMetadata(alias: string): Pick<AliasRecord, 'siteHost' | 'siteSlug'> {
+  const [localPart = ''] = alias.split('@');
+  const generatedAliasMatch = localPart.match(/^(.*)-[a-z0-9]{6}$/i);
+
+  if (generatedAliasMatch?.[1]) {
+    return {
+      siteHost: 'cloudflare',
+      siteSlug: generatedAliasMatch[1].toLowerCase()
+    };
+  }
+
+  return {
+    siteHost: 'manual',
+    siteSlug: 'custom'
+  };
+}
+
 function getDestinationForCreate(settings: ExtensionSettings, destinationEmailOverride?: string): string {
   const candidate = normalizeEmail(destinationEmailOverride || settings.destinationEmail);
   if (!candidate || !isValidEmail(candidate)) {
@@ -231,7 +269,7 @@ async function cloudflareRequest<T>(
   path: string,
   apiToken: string,
   init: RequestInit = {}
-): Promise<{ result: T; status: number }> {
+): Promise<{ result: T; status: number; resultInfo?: CloudflareEnvelope<T>['result_info'] }> {
   let response: Response;
 
   try {
@@ -264,32 +302,65 @@ async function cloudflareRequest<T>(
 
   return {
     result: payload.result,
-    status: response.status
+    status: response.status,
+    resultInfo: payload.result_info
   };
 }
 
+async function listCloudflarePages<T>(
+  path: string,
+  apiToken: string,
+  extractItems: (result: unknown) => T[]
+): Promise<T[]> {
+  const items: T[] = [];
+  let page = 1;
+
+  while (true) {
+    const separator = path.includes('?') ? '&' : '?';
+    const response = await cloudflareRequest<unknown>(
+      `${path}${separator}page=${page}&per_page=${CLOUDFLARE_PAGE_SIZE}`,
+      apiToken,
+      { method: 'GET' }
+    );
+    const pageItems = extractItems(response.result);
+    items.push(...pageItems);
+
+    const totalPages = response.resultInfo?.total_pages;
+    if (typeof totalPages === 'number') {
+      if (page >= totalPages) {
+        break;
+      }
+    } else if (pageItems.length < CLOUDFLARE_PAGE_SIZE) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  return items;
+}
+
 async function listAliasRules(settings: ExtensionSettings): Promise<EmailRoutingRule[]> {
-  const response = await cloudflareRequest<unknown>(
+  return listCloudflarePages<EmailRoutingRule>(
     `/zones/${settings.zoneId}/email/routing/rules`,
     settings.apiToken,
-    { method: 'GET' }
+    extractRuleList
   );
-  return extractRuleList(response.result);
+}
+
+async function listDestinationAddresses(settings: ExtensionSettings): Promise<DestinationAddress[]> {
+  return listCloudflarePages<DestinationAddress>(
+    `/accounts/${settings.accountId}/email/routing/addresses`,
+    settings.apiToken,
+    extractAddressList
+  );
 }
 
 async function ensureDestinationAddress(
   settings: ExtensionSettings,
   destinationEmail: string
 ): Promise<CloudflareEnsureStatus> {
-  const listResponse = await cloudflareRequest<unknown>(
-    `/accounts/${settings.accountId}/email/routing/addresses`,
-    settings.apiToken,
-    {
-      method: 'GET'
-    }
-  );
-
-  const addresses = extractAddressList(listResponse.result);
+  const addresses = await listDestinationAddresses(settings);
   const existing = addresses.find((item) => normalizeEmail(item.email ?? '') === destinationEmail);
 
   if (existing) {
@@ -414,10 +485,39 @@ export async function deleteAliasRouting(
   return 'deleted';
 }
 
+export async function listAliasRecordsForDestination(
+  settings: ExtensionSettings,
+  destinationEmailOverride?: string
+): Promise<AliasRecord[]> {
+  const destinationEmail = getDestinationForCreate(settings, destinationEmailOverride);
+  const syncedAt = new Date().toISOString();
+  const seenAliases = new Set<string>();
+  const rules = await listAliasRules(settings);
+
+  return rules
+    .filter((rule) => rule.enabled !== false && forwardsToDestination(rule, destinationEmail))
+    .map((rule) => extractAliasFromRule(rule))
+    .filter((alias): alias is string => Boolean(alias))
+    .filter((alias) => {
+      if (seenAliases.has(alias)) {
+        return false;
+      }
+
+      seenAliases.add(alias);
+      return true;
+    })
+    .map((alias) => ({
+      id: crypto.randomUUID(),
+      alias,
+      destinationEmail,
+      ...inferSyncedAliasMetadata(alias),
+      createdAt: syncedAt,
+      cloudflareStatus: 'exists'
+    }));
+}
+
 export async function testCloudflareAccess(settings: ExtensionSettings): Promise<void> {
-  await cloudflareRequest<unknown>(`/accounts/${settings.accountId}/email/routing/addresses`, settings.apiToken, {
-    method: 'GET'
-  });
+  await listDestinationAddresses(settings);
 
   await listAliasRules(settings);
 }

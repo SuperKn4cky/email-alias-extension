@@ -131,14 +131,39 @@ async function handleDeleteHistoryRecord(record: AliasRecord): Promise<void> {
   await loadHistory();
 }
 
-async function loadHistory(): Promise<void> {
-  const response = await sendRuntimeMessage({ type: 'GET_HISTORY' });
+function getHistoryDestinationEmail(): string | undefined {
+  const candidate = destinationRouteInput?.value.trim().toLowerCase() || configuredDefaultDestinationEmail;
+  return candidate && isValidEmail(candidate) ? candidate : undefined;
+}
+
+async function loadHistory(showSyncStatus = false): Promise<void> {
+  const response = await sendRuntimeMessage({
+    type: 'GET_HISTORY',
+    destinationEmail: getHistoryDestinationEmail()
+  });
   if (!response.ok) {
     setStatus(response.error);
     return;
   }
 
   renderHistory(response.data.items);
+
+  if (!showSyncStatus) {
+    return;
+  }
+
+  if (response.data.sync.error) {
+    setStatus(`Cloudflare sync failed: ${response.data.sync.error}`);
+    return;
+  }
+
+  if (response.data.sync.attempted) {
+    if (response.data.sync.imported > 0) {
+      setStatus(`Cloudflare sync complete. ${response.data.sync.imported} alias(es) imported.`);
+    } else {
+      setStatus('Cloudflare sync complete. No new aliases found.');
+    }
+  }
 }
 
 async function copyAlias(alias: string): Promise<void> {
@@ -532,7 +557,11 @@ fillButton?.addEventListener('click', () => {
 });
 
 refreshHistoryButton?.addEventListener('click', () => {
-  void loadHistory();
+  void loadHistory(true);
+});
+
+destinationRouteInput?.addEventListener('change', () => {
+  void loadHistory(true);
 });
 
 initializeThemeToggle(themeToggleButton);
